@@ -1,0 +1,189 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import statsmodels.formula.api as smf
+import statsmodels.api as sm
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+
+train = pd.read_csv('train.csv')           # import train data
+train.info()                              # visually inspect the table
+
+test = pd.read_csv('test.csv')            # import test data
+test.info()                               # visually inspect the table
+
+# inspect the columns and the rows with Null Values in the training dataset to perform Data Cleaning.
+
+counts = train.isnull().sum(axis=0)
+counts = counts[counts>0]
+null_counts = counts
+bins = np.arange(0, 900, 50)
+histogram = plt.hist(x=null_counts, bins=bins)
+plt.show()                                      # check rows with null values
+
+null_counts                                     # check columns with null values
+
+train = train.drop(columns = ['Name', 'Ticket', 'Cabin'])              # drop columns which have too many missing values
+train['Age'].fillna(train['Age'].mode()[0], inplace = True)             # replace missing values
+train['Embarked'].fillna(train['Embarked'].mode()[0], inplace = True)
+train.info()
+
+test = test.drop(columns = ['Name', 'Ticket', 'Cabin'])               # drop columns which have too many missing values
+test['Age'].fillna(test['Age'].mode()[0], inplace = True)              # replace missing values
+test['Embarked'].fillna(test['Embarked'].mode()[0], inplace = True)
+test['Fare'].fillna(test['Fare'].mode()[0], inplace = True)
+test.info()
+
+train['Sex'].replace({'male':1, 'female':2}, inplace=True)          # convert data type from string to numeric
+train['Embarked'].replace({'S':1, 'C':2, 'Q':3}, inplace=True)
+train.info()
+
+test['Sex'].replace({'male':1, 'female':2}, inplace=True)          # convert data type from string to numeric
+test['Embarked'].replace({'S':1, 'C':2, 'Q':3}, inplace=True)
+test.info()
+
+# visualize a correlation matrix to check the correlation between features
+
+plt.figure(figsize=(16,8))
+sns.heatmap(train.corr(), center=0, cmap='BrBG', annot=True)
+
+# inspect relationships between features using a pairplot
+
+cols_to_plot = train.iloc[:,1:]
+sns.pairplot(cols_to_plot, diag_kind='kde')
+
+# visualize the data of significant factors to find survival patterns.
+
+Sex = ['male','female']
+sns.countplot(data = train, x='Sex', hue='Survived')
+plt.xticks(ticks = [0,1], labels = Sex)
+plt.legend(['Not Survived', 'Survived'])
+plt.show()
+
+train['Fare_category'] = pd.cut(train['Fare'], bins = [0,10,30,120], labels = ['Low','Mid','High'])
+sns.countplot(data = train, x = 'Fare_category', hue = 'Survived')
+plt.legend(['Not Survived', 'Survived'])
+plt.show()
+
+Pclass = ['class1','class2','class3']
+sns.countplot(data = train, x = 'Pclass', hue = 'Survived')
+plt.xticks(ticks = [0,1,2], labels = Pclass)
+plt.legend(['Not Survived', 'Survived'])
+plt.show()
+
+# perform data modeling with several methods to find the best
+
+y = train['Survived']
+X = pd.get_dummies(train.drop('Survived', axis=1))
+
+tree_clf = DecisionTreeClassifier()      # Decision Tree Classification
+tree_clf.fit(X,y)                        # fit the model
+print(tree_clf.score(X,y))               # get accuracy score
+
+rnd_clf = RandomForestClassifier(n_estimators=100)        # Random Forest Classification
+rnd_clf.fit(X,y)                                          # fit the model
+print(rnd_clf.score(X,y))                                 # get acccuracy score
+
+svm_clf = SVC()                      # Support Vector Machine
+svm_clf.fit(X,y)                     # fit the model
+print(svm_clf.score(X,y))            # get accuracy score
+
+features = ['Pclass', 'Sex', 'Fare']        # use the features which are highly related based on visual inspection
+X = pd.get_dummies(train[features])
+X_test = pd.get_dummies(test[features])
+
+model = RandomForestClassifier()        # choose Random Forest Classifier based on the accuracy score
+model.fit(X, y)
+y_pred = model.predict(X_test)
+
+# find the best parameters for the model
+
+from sklearn.model_selection import GridSearchCV
+
+param_grid = {'n_estimators': [25, 50, 100, 150], 'max_features': ['sqrt', 'log2', None], 'max_depth': [3, 6, 9],
+              'max_leaf_nodes': [3, 6, 9],}
+grid_search = GridSearchCV(RandomForestClassifier(), param_grid = param_grid)
+grid_search.fit(X, y)
+print(grid_search.best_estimator_)
+
+# update the model with the best parameters
+
+model_grid = RandomForestClassifier(max_depth=9, max_features=None, max_leaf_nodes=9, n_estimators=25)
+model_grid.fit(X, y)
+y_pred_grid = model.predict(X_test)
+
+# get the output of the prediction
+
+output = pd.DataFrame({'PassengerId': test.PassengerId, 'Survived': y_pred_grid})
+print(output)
+
+# define functions for k-fold cross validation
+
+def plot_roc_curve(fprs, tprs):
+    
+    tprs_interp = []
+    aucs = []
+    mean_fpr = np.linspace(0, 1, 100)
+    f, ax = plt.subplots(figsize=(14,10))
+    
+    for i, (fpr, tpr) in enumerate(zip(fprs, tprs)):
+        tprs_interp.append(np.interp(mean_fpr, fpr, tpr))
+        tprs_interp[-1][0] = 0.0
+        roc_auc = auc(fpr, tpr)
+        aucs.append(roc_auc)
+        ax.plot(fpr, tpr, lw=1, alpha=0.3,
+                 label='ROC fold %d (AUC = %0.2f)' % (i, roc_auc))
+        
+    plt.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r',
+             label='Luck', alpha=.8)
+    
+    mean_tpr = np.mean(tprs_interp, axis=0)
+    mean_tpr[-1] = 1.0
+    mean_auc = auc(mean_fpr, mean_tpr)
+    std_auc = np.std(aucs)
+    ax.plot(mean_fpr, mean_tpr, color='b',
+             label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
+             lw=2, alpha=.8)
+    
+    std_tpr = np.std(tprs_interp, axis=0)
+    tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
+    tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
+    ax.fill_between(mean_fpr, tprs_lower, tprs_upper, color='grey', alpha=.2,
+                     label=r'$\pm$ 1 std. dev.')
+    
+    ax.set_xlim([-0.05, 1.05])
+    ax.set_ylim([-0.05, 1.05])
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title('Receiver operating characteristic')
+    ax.legend(loc="lower right")
+    plt.show()
+    return (f, ax)
+
+def compute_roc_auc(index):
+    y_predict = model_grid.predict_proba(X.iloc[index])[:,1]
+    fpr, tpr, thresholds = roc_curve(y.iloc[index], y_predict)
+    auc_score = auc(fpr, tpr)
+    return fpr, tpr, auc_score
+
+from sklearn.metrics import roc_curve
+from sklearn.metrics import auc
+from sklearn.model_selection import StratifiedKFold
+
+cv = StratifiedKFold(n_splits = 5, random_state = 123, shuffle = True)
+results = pd.DataFrame(columns = ['training_score', 'test_score'])
+fprs, tprs, scores = [], [], []
+    
+for (train, test), i in zip(cv.split(X, y), range(5)):
+    model_grid.fit(X.iloc[train], y.iloc[train])
+    _, _, auc_score_train = compute_roc_auc(train)
+    fpr, tpr, auc_score = compute_roc_auc(test)
+    scores.append((auc_score_train, auc_score))
+    fprs.append(fpr)
+    tprs.append(tpr)
+
+plot_roc_curve(fprs, tprs);                                    # get roc curve
+pd.DataFrame(scores, columns=['AUC Train', 'AUC Test'])        # get data frame
+
